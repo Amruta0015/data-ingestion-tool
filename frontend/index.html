@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Data Ingestion Tool</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .section {
+            margin-bottom: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .hidden {
+            display: none;
+        }
+        .column-list {
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin-top: 10px;
+        }
+        .status {
+            padding: 10px;
+            margin-top: 10px;
+            border-radius: 5px;
+        }
+        .success {
+            background-color: #dff0d8;
+            color: #3c763d;
+        }
+        .error {
+            background-color: #f2dede;
+            color: #a94442;
+        }
+        button {
+            padding: 8px 15px;
+            background-color: #337ab7;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #286090;
+        }
+        input, select {
+            padding: 8px;
+            margin: 5px 0;
+            width: 100%;
+            box-sizing: border-box;
+        }
+    </style>
+</head>
+<body>
+    <h1>Data Ingestion Tool</h1>
+    
+    <div class="section">
+        <h2>1. Select Data Source</h2>
+        <label for="dataSource">Data Source:</label>
+        <select id="dataSource">
+            <option value="">-- Select Source --</option>
+            <option value="clickhouse">ClickHouse → Flat File</option>
+            <option value="file">Flat File → ClickHouse</option>
+        </select>
+    </div>
+    
+    <!-- ClickHouse Connection Section -->
+    <div id="clickhouse-section" class="section hidden">
+        <h2>2. ClickHouse Connection</h2>
+        <div>
+            <label>Host:</label>
+            <input type="text" id="ch-host" placeholder="localhost">
+        </div>
+        <div>
+            <label>Port:</label>
+            <input type="text" id="ch-port" placeholder="8123">
+        </div>
+        <div>
+            <label>Database:</label>
+            <input type="text" id="ch-database" placeholder="default">
+        </div>
+        <div>
+            <label>User:</label>
+            <input type="text" id="ch-user" placeholder="default">
+        </div>
+        <div>
+            <label>JWT Token:</label>
+            <input type="password" id="ch-token" placeholder="(optional)">
+        </div>
+        <button id="connect-btn">Connect</button>
+        
+        <div id="table-selection" class="hidden">
+            <h3>3. Select Table</h3>
+            <select id="table-list"></select>
+            <button id="load-columns-btn">Load Columns</button>
+        </div>
+        
+        <div id="column-selection" class="hidden">
+            <h3>4. Select Columns to Export</h3>
+            <div id="column-list" class="column-list"></div>
+            <button id="export-btn">Export to CSV</button>
+        </div>
+    </div>
+    
+    <!-- File Upload Section -->
+    <div id="file-section" class="section hidden">
+        <h2>2. File Upload</h2>
+        <div>
+            <label>Select CSV File:</label>
+            <input type="file" id="file-upload" accept=".csv">
+        </div>
+        <div>
+            <label>Target Table Name:</label>
+            <input type="text" id="table-name" placeholder="imported_data">
+        </div>
+        <button id="import-btn">Import to ClickHouse</button>
+    </div>
+    
+    <!-- Status Section -->
+    <div class="section">
+        <h2>Status</h2>
+        <div id="status-message" class="status"></div>
+    </div>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const dataSourceSelect = document.getElementById('dataSource');
+            const clickhouseSection = document.getElementById('clickhouse-section');
+            const fileSection = document.getElementById('file-section');
+            
+            // Show/hide sections based on source selection
+            dataSourceSelect.addEventListener('change', function() {
+                clickhouseSection.classList.add('hidden');
+                fileSection.classList.add('hidden');
+                
+                if (this.value === 'clickhouse') {
+                    clickhouseSection.classList.remove('hidden');
+                } else if (this.value === 'file') {
+                    fileSection.classList.remove('hidden');
+                }
+            });
+            
+            // ClickHouse Connection
+            document.getElementById('connect-btn').addEventListener('click', connectToClickHouse);
+            document.getElementById('load-columns-btn').addEventListener('click', loadColumns);
+            document.getElementById('export-btn').addEventListener('click', exportData);
+            document.getElementById('import-btn').addEventListener('click', importData);
+            
+            function showStatus(message, isError = false) {
+                const statusDiv = document.getElementById('status-message');
+                statusDiv.textContent = message;
+                statusDiv.className = isError ? 'status error' : 'status success';
+            }
+            
+            async function connectToClickHouse() {
+                const host = document.getElementById('ch-host').value;
+                const port = document.getElementById('ch-port').value;
+                const database = document.getElementById('ch-database').value;
+                const user = document.getElementById('ch-user').value;
+                const token = document.getElementById('ch-token').value;
+                
+                try {
+                    showStatus('Connecting to ClickHouse...');
+                    
+                    const response = await fetch('http://localhost:5000/connect-clickhouse', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            host,
+                            port,
+                            database,
+                            user,
+                            jwt_token: token
+                        })
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (data.status === 'success') {
+                        showStatus(data.message);
+                        document.getElementById('table-selection').classList.remove('hidden');
+                        loadTables();
+                    } else {
+                        showStatus(data.message, true);
+                    }
+                } catch (error) {
+                    showStatus('Connection failed: ' + error.message, true);
+                }
+            }
+            
+            async function loadTables() {
+                try {
+                    const response = await fetch('http://localhost:5000/list-tables');
+                    const data = await response.json();
+                    
+                    if (data.status === 'success') {
+                        const tableSelect = document.getElementById('table-list');
+                        tableSelect.innerHTML = '';
+                        
+                        data.tables.forEach(table => {
+                            const option = document.createElement('option');
+                            option.value = table;
+                            option.textContent = table;
+                            tableSelect.appendChild(option);
+                        });
+                    } else {
+                        showStatus(data.message, true);
+                    }
+                } catch (error) {
+                    showStatus('Failed to load tables: ' + error.message, true);
+                }
+            }
+            
+            async function loadColumns() {
+                const table = document.getElementById('table-list').value;
+                
+                try {
+                    showStatus('Loading columns...');
+                    
+                    const response = await fetch(`http://localhost:5000/get-columns/${table}`);
+                    const data = await response.json();
+                    
+                    if (data.status === 'success') {
+                        const columnListDiv = document.getElementById('column-list');
+                        columnListDiv.innerHTML = '';
+                        
+                        data.columns.forEach(column => {
+                            const div = document.createElement('div');
+                            const checkbox = document.createElement('input');
+                            checkbox.type = 'checkbox';
+                            checkbox.id = `col-${column}`;
+                            checkbox.value = column;
+                            checkbox.checked = true;
+                            
+                            const label = document.createElement('label');
+                            label.htmlFor = `col-${column}`;
+                            label.textContent = column;
+                            
+                            div.appendChild(checkbox);
+                            div.appendChild(label);
+                            columnListDiv.appendChild(div);
+                        });
+                        
+                        document.getElementById('column-selection').classList.remove('hidden');
+                        showStatus(`Loaded ${data.columns.length} columns from ${table}`);
+                    } else {
+                        showStatus(data.message, true);
+                    }
+                } catch (error) {
+                    showStatus('Failed to load columns: ' + error.message, true);
+                }
+            }
+            
+            async function exportData() {
+                const table = document.getElementById('table-list').value;
+                const checkboxes = document.querySelectorAll('#column-list input[type="checkbox"]:checked');
+                const columns = Array.from(checkboxes).map(cb => cb.value);
+                
+                try {
+                    showStatus('Exporting data...');
+                    
+                    const response = await fetch('http://localhost:5000/export-data', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            table,
+                            columns
+                        })
+                    });
+                    
+                    if (response.ok) {
+                        const blob = await response.blob();
+                        const url = window.URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `${table}_export.csv`;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        window.URL.revokeObjectURL(url);
+                        
+                        showStatus('Export completed successfully!');
+                    } else {
+                        const data = await response.json();
+                        showStatus(data.message, true);
+                    }
+                } catch (error) {
+                    showStatus('Export failed: ' + error.message, true);
+                }
+            }
+            
+            async function importData() {
+                const fileInput = document.getElementById('file-upload');
+                const tableName = document.getElementById('table-name').value;
+                
+                if (!fileInput.files.length) {
+                    showStatus('Please select a file first', true);
+                    return;
+                }
+                
+                try {
+                    showStatus('Importing data...');
+                    
+                    const formData = new FormData();
+                    formData.append('file', fileInput.files[0]);
+                    formData.append('table_name', tableName);
+                    
+                    const response = await fetch('http://localhost:5000/import-data', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (data.status === 'success') {
+                        showStatus(data.message);
+                    } else {
+                        showStatus(data.message, true);
+                    }
+                } catch (error) {
+                    showStatus('Import failed: ' + error.message, true);
+                }
+            }
+        });
+    </script>
+</body>
+</html>
